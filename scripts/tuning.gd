@@ -2,11 +2,13 @@ extends RefCounted
 
 const MOVEMENT_A := {
 	"speed": 302.0, "accel": 2550.0, "brake": 3060.0, "air_control": 0.73,
+	"turn_brake": 3700.0, "air_drag": 520.0,
 	"jump_height": 164.0, "buffer": 0.115, "roll_time": 0.31, "roll_speed": 550.0,
 	"iframe_start": 0.045, "iframe_end": 0.245,
 }
 const MOVEMENT_B := {
-	"speed": 302.0, "accel": 1450.0, "brake": 1650.0, "air_control": 0.39,
+	"speed": 302.0, "accel": 1450.0, "brake": 1020.0, "air_control": 0.39,
+	"turn_brake": 1150.0, "air_drag": 100.0,
 	"jump_height": 148.0, "buffer": 0.05, "roll_time": 0.38, "roll_speed": 500.0,
 	"iframe_start": 0.045, "iframe_end": 0.245,
 }
@@ -15,7 +17,9 @@ const FAST := {"reach": 67.0, "windup": 0.10, "active": 0.085, "recovery": 0.19,
 const HEAVY := {"reach": 140.0, "windup": 0.33, "active": 0.13, "recovery": 0.40, "move_factor": 0.0, "damage": 2.0, "interrupts": true}
 const M_FIELDS := [
 	["accel", "地面加速度", 500, 6000, 50, "px/s²"],
-	["brake", "地面制动", 500, 6500, 50, "px/s²"],
+	["brake", "地面松键减速", 100, 6500, 10, "px/s²"],
+	["turn_brake", "反向制动", 200, 6500, 50, "px/s²"],
+	["air_drag", "空中松键减速", 0, 3000, 10, "px/s²"],
 	["speed", "移动速度", 150, 475, 5, "px/s"],
 	["air_control", "空中控制", 0.10, 1.40, 0.01, "×"],
 	["jump_height", "目标跳高", 65, 250, 1, "px"],

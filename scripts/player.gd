@@ -75,7 +75,6 @@ func step(delta: float) -> void:
 			if age >= movement.roll_time:
 				state = &"ready"
 				roll_cooldown = 0.13
-				velocity.x = clampf(velocity.x, -movement.speed, movement.speed)
 		&"attack":
 			if age >= swing.windup + swing.active + swing.recovery:
 				state = &"ready"
@@ -87,12 +86,11 @@ func step(delta: float) -> void:
 		if absf(axis) > 0.01:
 			facing = signf(axis)
 		if queued(roll_buffer) and is_on_floor() and roll_cooldown <= 0.0:
+			velocity.x = facing * maxf(facing * velocity.x, movement.roll_speed)
 			start_action(&"roll")
 			roll_buffer = -1.0
 		elif queued(attack_buffer) and attack_enabled:
 			swing = weapon.duplicate()
-			var attack_speed: float = movement.speed * swing.move_factor
-			velocity.x = clampf(velocity.x, -attack_speed, attack_speed)
 			spent_swing = false
 			start_action(&"attack")
 			attack_buffer = -1.0
@@ -102,19 +100,15 @@ func step(delta: float) -> void:
 			coyote = 0.0
 			jump_buffer = -1.0
 
+	var grounded := is_on_floor() and velocity.y >= 0.0
 	match state:
-		&"roll":
-			velocity.x = facing * float(movement.roll_speed)
 		&"attack":
 			if swing.move_factor == 0.0:
 				velocity.x = 0.0
 			else:
-				velocity.x = move_toward(velocity.x, axis * movement.speed * swing.move_factor, movement.accel * delta)
+				apply_horizontal_inertia(axis, movement.speed * swing.move_factor, grounded, delta)
 		&"ready":
-			var rate: float = movement.accel if absf(axis) > 0.01 else movement.brake
-			if not is_on_floor():
-				rate *= float(movement.air_control)
-			velocity.x = move_toward(velocity.x, axis * movement.speed, rate * delta)
+			apply_horizontal_inertia(axis, movement.speed, grounded, delta)
 		&"hurt":
 			velocity.x = move_toward(velocity.x, 0.0, 660.0 * delta)
 
@@ -122,6 +116,23 @@ func step(delta: float) -> void:
 	jump_buffer = next_buffer(jump_buffer, delta)
 	roll_buffer = next_buffer(roll_buffer, delta)
 	attack_buffer = next_buffer(attack_buffer, delta)
+
+func apply_horizontal_inertia(axis: float, speed: float, grounded: bool, delta: float) -> void:
+	var control: float = 1.0 if grounded else movement.air_control
+	var deceleration: float = movement.brake if grounded else movement.air_drag
+	if is_zero_approx(axis):
+		velocity.x = move_toward(velocity.x, 0.0, deceleration * delta)
+		return
+
+	var target := axis * speed
+	if velocity.x * axis < 0.0:
+		var turn_brake: float = movement.turn_brake * control
+		var time_to_stop := absf(velocity.x) / turn_brake
+		velocity.x = move_toward(velocity.x, 0.0, turn_brake * delta)
+		delta = maxf(0.0, delta - time_to_stop)
+
+	var rate: float = deceleration if absf(velocity.x) > absf(target) else movement.accel * control
+	velocity.x = move_toward(velocity.x, target, rate * delta)
 
 func queued(value: float) -> bool:
 	return value >= 0.0 and value <= float(movement.buffer) + 0.0001
@@ -156,5 +167,5 @@ func receive_hit(from_x: float) -> bool:
 	state = &"hurt" if hp > 0 else &"dead"
 	age = 0.0
 	flash = 0.20
-	velocity.x = 240.0 * (1.0 if position.x >= from_x else -1.0)
+	velocity.x += 240.0 * (1.0 if position.x >= from_x else -1.0)
 	return true

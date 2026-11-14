@@ -11,7 +11,7 @@ const ENEMY_BODY := Vector2(34, 52)
 const PHASE_NAMES := {"windup": "前摇", "active": "有效段", "recovery": "后摇", "chase": "追击", "stagger": "硬直", "dead": "倒下"}
 const PLAYER_NAMES := {"ready": "可行动", "roll": "翻滚", "hurt": "受击硬直", "dead": "倒下"}
 const OBJECTIVES := [
-	"对比 A/B 方案的起步、急停、空中回拉、落地缓冲和翻滚距离。",
+	"对比 A/B 方案的起步、松键滑行、反向制动、空中惯性和翻滚余速。",
 	"观察抬手与提示音。试着走出范围、翻滚穿过或等待后摇再出手。",
 	"同场地、同敌人。分别用两把武器，比较出手时机、命中距离和受击。",
 ]
@@ -142,7 +142,7 @@ func draw_overlay() -> void:
 	var mode: int = lab.mode
 	var player_state: String = PHASE_NAMES.get(player.attack_phase(), PLAYER_NAMES.get(str(player.state), ""))
 	txt(Vector2(45, 180), "玩家 · " + player_state, 15, TEAL)
-	var status := "%s   ·   %.1f s   ·   %d px/s" % [lab.PROFILES[lab.profile_id], lab.elapsed, roundi(absf(player.velocity.x))]
+	var status := "%s   ·   %.1f s   ·   横向速度 %+d px/s" % [lab.PROFILES[lab.profile_id], lab.elapsed, roundi(player.velocity.x)]
 	if mode > 0:
 		status = "%s   ·   %.1f s" % [lab.WEAPONS[lab.arm_index()], lab.elapsed]
 		hp_meter(Vector2(47, 191), player.hp, player.MAX_HP, TEAL)
