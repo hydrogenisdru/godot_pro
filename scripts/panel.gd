@@ -13,6 +13,8 @@ var fields: VBoxContainer
 var note: LineEdit
 var save_status: Label
 var title: Label
+var pages: HBoxContainer
+var feedback_page := false
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -50,6 +52,12 @@ func _ready() -> void:
 	shell.add_child(stack)
 	title = label("实时调参", 23, INK)
 	stack.add_child(title)
+	pages = HBoxContainer.new()
+	for index in 2:
+		var button := make_button("战斗参数" if index == 0 else "打击反馈", select_page.bind(index == 1))
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pages.add_child(button)
+	stack.add_child(pages)
 	scroll = ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -84,7 +92,20 @@ func refresh() -> void:
 	for child in fields.get_children():
 		fields.remove_child(child)
 		child.queue_free()
-	title.text = "实时调参"
+	pages.visible = lab.mode > 0
+	var show_feedback: bool = pages.visible and feedback_page
+	for index in pages.get_child_count():
+		var button: Button = pages.get_child(index)
+		var active := (index == 1) == show_feedback
+		button.add_theme_stylebox_override("normal", style("#1d534c", "#69e0c3") if active else style("#172936", "#2d4656"))
+	scroll.scroll_vertical = 0
+	if show_feedback:
+		for spec in Tuning.FEEDBACK_FIELDS:
+			add_toggle(spec[1], lab.options[spec[0]], set_option.bind(spec[0]))
+			add_fields("feedback", lab.feedback_values, spec[2])
+			fields.add_child(HSeparator.new())
+		fields.add_child(make_button("恢复反馈默认值", lab.restore_feedback_defaults))
+		return
 	var tabs := HBoxContainer.new()
 	fields.add_child(tabs)
 	var choosing_weapon: bool = lab.mode == 2
@@ -98,9 +119,11 @@ func refresh() -> void:
 			button.add_theme_stylebox_override("normal", style("#1d534c", "#69e0c3"))
 		tabs.add_child(button)
 	fields.add_child(label("调参或切换方案会重开试验", 13, MUTED))
+	if lab.mode > 0:
+		section("副武器 · 爆炸球", "throw", lab.throw_data, Tuning.THROW_FIELDS)
 	if lab.mode == 2:
 		section("当前武器", "weapon", lab.arms[lab.arm_index()], Tuning.W_FIELDS)
-		add_toggle("重击可打断前摇" if lab.weapon_id == 1 else "可打断敌人前摇", lab.arms[lab.arm_index()].interrupts, set_interrupt)
+		add_toggle("延长敌人受击硬直", lab.arms[lab.arm_index()].interrupts, set_extended_hitstun)
 	if lab.mode > 0:
 		section("近战敌人", "enemy", lab.enemy_data, Tuning.E_FIELDS)
 	section("角色控制 · " + lab.PROFILES[lab.profile_id], "motion", lab.motion[lab.profile_id], Tuning.M_FIELDS)
@@ -110,14 +133,20 @@ func refresh() -> void:
 		for i in 2:
 			motion_tabs.add_child(make_button(lab.PROFILES[i], lab.select_profile.bind(i)))
 	fields.add_child(label("反馈与观测", 16, ACCENT))
-	for entry in [["sound", "合成短音效"], ["freeze", "命中停顿"], ["shake", "屏幕震动"], ["boxes", "显示攻击/受击框"]]:
+	for entry in [["sound", "合成短音效"], ["boxes", "显示攻击/受击框"]]:
 		var key: String = entry[0]
 		add_toggle(entry[1], lab.options[key], set_option.bind(key))
 	fields.add_child(make_button("恢复当前实验默认参数", lab.restore_defaults))
-	scroll.scroll_vertical = 0
+
+func select_page(show_feedback: bool) -> void:
+	feedback_page = show_feedback
+	refresh()
 
 func section(heading: String, group: String, data: Dictionary, specs: Array) -> void:
 	fields.add_child(label(heading, 16, ACCENT))
+	add_fields(group, data, specs)
+
+func add_fields(group: String, data: Dictionary, specs: Array) -> void:
 	for spec in specs:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 3)
@@ -125,6 +154,14 @@ func section(heading: String, group: String, data: Dictionary, specs: Array) -> 
 		var caption := label(spec[1], 13, INK)
 		caption.custom_minimum_size.x = 87
 		row.add_child(caption)
+		if spec[5] == "color":
+			var picker := ColorPickerButton.new()
+			picker.color = data[spec[0]]
+			picker.edit_alpha = false
+			picker.custom_minimum_size = Vector2(58, 22)
+			picker.color_changed.connect(set_color.bind(group, spec[0]))
+			row.add_child(picker)
+			continue
 		var slider := HSlider.new()
 		slider.min_value = spec[2]
 		slider.max_value = spec[3]
@@ -145,14 +182,21 @@ func set_slider(value: float, group: String, key: String, unit: String, display:
 	display.text = format_value(value, unit)
 	lab.change_parameter(group, key, value)
 
+func set_color(value: Color, group: String, key: String) -> void:
+	lab.change_parameter(group, key, value)
+
 func format_value(value: float, unit: String) -> String:
 	if unit == "ms":
 		return "%d ms" % roundi(value * 1000.0)
 	if unit == "×":
 		return "%.2f ×" % value
+	if unit == "%":
+		return "%d%%" % roundi(value * 100.0)
+	if unit == "px" and not is_equal_approx(value, roundf(value)):
+		return "%.1f px" % value
 	return "%d %s" % [roundi(value), unit]
 
-func set_interrupt(enabled: bool) -> void:
+func set_extended_hitstun(enabled: bool) -> void:
 	lab.arms[lab.arm_index()].interrupts = enabled
 	lab.save_setup()
 	lab.reset_trial()

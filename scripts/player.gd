@@ -2,7 +2,9 @@ extends CharacterBody2D
 
 const BODY := Vector2(28, 48)
 const GRAVITY := 1500.0
+const JUMP_RELEASE_SPEED_FACTOR := 0.55
 const MAX_HP := 5
+const HURT_TIME := 0.24
 
 var movement: Dictionary
 var weapon: Dictionary
@@ -15,12 +17,15 @@ var jump_buffer := -1.0
 var roll_buffer := -1.0
 var attack_buffer := -1.0
 var coyote := 0.0
+var air_jump_used := false
+var jump_can_be_cut := false
 var roll_cooldown := 0.0
 var attack_enabled := false
 var spent_swing := false
-var flash := 0.0
+var hurt_brake := 660.0
 
 signal action_started(action: StringName, buffered: bool)
+signal attack_became_active
 
 func _ready() -> void:
 	var shape := RectangleShape2D.new()
@@ -40,16 +45,17 @@ func reset(at: Vector2) -> void:
 	hp = MAX_HP
 	age = 0.0
 	coyote = 0.0
+	air_jump_used = false
+	jump_can_be_cut = false
 	roll_cooldown = 0.0
 	jump_buffer = -1.0
 	roll_buffer = -1.0
 	attack_buffer = -1.0
-	flash = 0.0
 	spent_swing = false
 	reset_physics_interpolation()
 
 func sample_inputs() -> void:
-	if hp <= 0:
+	if hp <= 0 or state == &"hurt":
 		return
 	if Input.is_action_just_pressed("jump"):
 		jump_buffer = 0.0
@@ -61,12 +67,13 @@ func sample_inputs() -> void:
 func step(delta: float) -> void:
 	if hp <= 0:
 		return
+	var was_attacking := attack_phase() == "active"
 	age += delta
-	flash = maxf(0.0, flash - delta)
 	roll_cooldown = maxf(0.0, roll_cooldown - delta)
 	coyote = 0.08 if is_on_floor() else maxf(0.0, coyote - delta)
 	if is_on_floor():
 		velocity.y = 0.0
+		air_jump_used = false
 	velocity.y += GRAVITY * delta
 	var axis := Input.get_axis("move_left", "move_right")
 
@@ -79,7 +86,7 @@ func step(delta: float) -> void:
 			if age >= swing.windup + swing.active + swing.recovery:
 				state = &"ready"
 		&"hurt":
-			if age >= 0.24:
+			if age >= HURT_TIME:
 				state = &"ready"
 
 	if state == &"ready":
@@ -94,11 +101,15 @@ func step(delta: float) -> void:
 			spent_swing = false
 			start_action(&"attack")
 			attack_buffer = -1.0
-		elif queued(jump_buffer) and coyote > 0.0:
-			velocity.y = -sqrt(2.0 * GRAVITY * float(movement.jump_height))
-			action_started.emit(&"jump", jump_buffer > 0.001)
-			coyote = 0.0
-			jump_buffer = -1.0
+		elif queued(jump_buffer) and (coyote > 0.0 or not air_jump_used):
+			perform_jump(coyote <= 0.0)
+
+	if jump_can_be_cut:
+		if velocity.y >= 0.0:
+			jump_can_be_cut = false
+		elif not Input.is_action_pressed("jump"):
+			velocity.y *= JUMP_RELEASE_SPEED_FACTOR
+			jump_can_be_cut = false
 
 	var grounded := is_on_floor() and velocity.y >= 0.0
 	match state:
@@ -110,12 +121,23 @@ func step(delta: float) -> void:
 		&"ready":
 			apply_horizontal_inertia(axis, movement.speed, grounded, delta)
 		&"hurt":
-			velocity.x = move_toward(velocity.x, 0.0, 660.0 * delta)
+			velocity.x = move_toward(velocity.x, 0.0, hurt_brake * delta)
 
 	move_and_slide()
+	if not was_attacking and attack_phase() == "active":
+		attack_became_active.emit()
 	jump_buffer = next_buffer(jump_buffer, delta)
 	roll_buffer = next_buffer(roll_buffer, delta)
 	attack_buffer = next_buffer(attack_buffer, delta)
+
+func perform_jump(in_air: bool) -> void:
+	var height: float = movement.air_jump_height if in_air else movement.jump_height
+	velocity.y = -sqrt(2.0 * GRAVITY * height)
+	jump_can_be_cut = true
+	air_jump_used = in_air
+	coyote = 0.0
+	action_started.emit(&"air_jump" if in_air else &"jump", jump_buffer > 0.001)
+	jump_buffer = -1.0
 
 func apply_horizontal_inertia(axis: float, speed: float, grounded: bool, delta: float) -> void:
 	var control: float = 1.0 if grounded else movement.air_control
@@ -160,12 +182,18 @@ func attack_phase() -> String:
 		return "active"
 	return "recovery"
 
-func receive_hit(from_x: float) -> bool:
+func receive_hit(horizontal_impulse: float, brake: float) -> bool:
 	if hp <= 0 or state == &"hurt" or invulnerable():
 		return false
 	hp -= 1
 	state = &"hurt" if hp > 0 else &"dead"
 	age = 0.0
-	flash = 0.20
-	velocity.x += 240.0 * (1.0 if position.x >= from_x else -1.0)
+	swing = {}
+	spent_swing = true
+	jump_buffer = -1.0
+	roll_buffer = -1.0
+	attack_buffer = -1.0
+	jump_can_be_cut = false
+	hurt_brake = brake
+	velocity.x += horizontal_impulse
 	return true

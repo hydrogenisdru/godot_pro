@@ -2,6 +2,7 @@ extends CharacterBody2D
 
 const BODY := Vector2(34, 52)
 const MAX_HP := 6
+const HURT_TIME := 0.16
 
 var profile: Dictionary
 var swing: Dictionary
@@ -10,7 +11,9 @@ var age := 0.0
 var facing := -1.0
 var hp := MAX_HP
 var spent_swing := false
-var flash := 0.0
+var hurt_time := HURT_TIME
+var knockback_velocity := 0.0
+var knockback_brake := 660.0
 
 signal phase_started(phase: StringName)
 
@@ -31,13 +34,12 @@ func reset(at: Vector2) -> void:
 	facing = -1.0
 	hp = MAX_HP
 	age = 0.0
-	flash = 0.0
+	knockback_velocity = 0.0
 	spent_swing = false
 	reset_physics_interpolation()
 
-func step(delta: float, target: Vector2) -> void:
+func step(delta: float, target: Vector2, ball_direction := 0.0) -> void:
 	age += delta
-	flash = maxf(0.0, flash - delta)
 	velocity.x = 0.0
 	if is_on_floor():
 		velocity.y = 0.0
@@ -47,7 +49,9 @@ func step(delta: float, target: Vector2) -> void:
 			var offset := target.x - position.x
 			if absf(offset) > 1.0:
 				facing = signf(offset)
-			if absf(offset) <= profile.reach - 8.0 and absf(target.y - position.y) < 55.0:
+			if ball_direction != 0.0 or (absf(offset) <= profile.reach - 8.0 and absf(target.y - position.y) < 55.0):
+				if ball_direction != 0.0:
+					facing = ball_direction
 				swing = profile.duplicate()
 				spent_swing = false
 				enter(&"windup")
@@ -63,19 +67,30 @@ func step(delta: float, target: Vector2) -> void:
 			if age >= swing.recovery:
 				enter(&"chase")
 		&"stagger":
-			if age >= swing.stagger:
+			if age >= hurt_time:
 				enter(&"chase")
+	var knocked_back := not is_zero_approx(knockback_velocity)
+	if knocked_back:
+		velocity.x = knockback_velocity
 	move_and_slide()
+	if knocked_back:
+		knockback_velocity = move_toward(velocity.x, 0.0, knockback_brake * delta)
 
 func enter(next: StringName) -> void:
 	state = next
 	age = 0.0
 	phase_started.emit(next)
 
-func receive_hit(damage: int, interrupts: bool) -> void:
+func receive_hit(damage: int, extended_hitstun: bool, horizontal_impulse: float, brake: float) -> void:
 	hp = maxi(0, hp - damage)
-	flash = 0.18
+	swing = {}
+	spent_swing = true
+	knockback_velocity += horizontal_impulse
+	knockback_brake = brake
 	if hp == 0:
 		enter(&"dead")
-	elif interrupts and state == &"windup":
+	else:
+		var duration: float = profile.stagger if extended_hitstun else HURT_TIME
+		var remaining := maxf(0.0, hurt_time - age) if state == &"stagger" else 0.0
+		hurt_time = maxf(duration, remaining)
 		enter(&"stagger")
