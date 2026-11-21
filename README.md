@@ -6,7 +6,11 @@
 /Applications/Godot.app/Contents/MacOS/Godot --path /Users/yangyu/workspace/godot_pro
 ```
 
-本项目使用灰盒角色和合成音效，自带的数值是可调的原型假设。测得的《死亡细胞》数据可以录入原 Excel 的「实机观察」，再与这里的试验记录对照。
+本项目使用像素待机贴图和合成音效，自带的数值是可调的原型假设。测得的《死亡细胞》数据可以录入原 Excel 的「实机观察」，再与这里的试验记录对照。
+
+主角素材位于 [assets/characters/red_ninja](assets/characters/red_ninja)。`master.png` 是定稿精灵。`red_ninja_video_idle.tres` 由 Sprite Forge 从 `gemini_generated_video_b358820f_v2.mp4` 提取第 34 至 154 帧。站定时以 24 fps 正向循环，脚底锚点为 (88, 96)。
+
+`red_ninja_video_run.tres` 从 `gemini_generated_video_a556fb52.mp4` 提取第 99 至 146 帧，两段帧索引均从 0 计数。跑步动画使用同一色板和像素比例，落地基准锚点为 (89, 95)。地面移动时按当前速度推进正向循环，约每 157.65 世界像素播放一轮。起跳时使用基础姿势。敌人使用 [enemy_idle.aseprite](assets/characters/enemy_idle.aseprite) 导出的贴图。战斗区域以 1 倍显示，完整展示房间宽度。翻滚和倒下沿用原有状态提示。
 
 ## 控制
 

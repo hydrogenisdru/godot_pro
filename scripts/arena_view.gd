@@ -1,6 +1,19 @@
 extends Node2D
 
 const ThrowBall = preload("res://scripts/throw_ball.gd")
+const HERO_IDLE := preload("res://assets/characters/red_ninja/red_ninja_video_idle.tres")
+const HERO_RUN := preload("res://assets/characters/red_ninja/red_ninja_video_run.tres")
+const ENEMY_IDLE := preload("res://assets/characters/enemy_idle.png")
+const IDLE_ORIGIN := Vector2(23, 56)
+const IDLE_BOUNDS := Rect2(-IDLE_ORIGIN, Vector2(64, 64))
+const HERO_SPRITE_SCALE := 48.0 / 93.0
+const HERO_IDLE_BOUNDS := Rect2(Vector2(-88, -96) * HERO_SPRITE_SCALE, Vector2(118, 98) * HERO_SPRITE_SCALE)
+const HERO_RUN_BOUNDS := Rect2(Vector2(-89, -95) * HERO_SPRITE_SCALE, Vector2(128, 97) * HERO_SPRITE_SCALE)
+const HERO_RUN_LOOP_DISTANCE := 157.65
+const ARENA_ZOOM := 1.0
+const ARENA_FRAME := Rect2(28, 151, 868, 445)
+const ARENA_WINDOW := Rect2(29, 208, 866, 387)
+const GROUND_LINE := 555.0
 const INK := Color("#e1edf4")
 const MUTED := Color("#8fa8b8")
 const TEAL := Color("#69e0c3")
@@ -19,84 +32,178 @@ const OBJECTIVES := [
 
 var lab
 var font: Font
+var hero_idle_flash: Array[Texture2D]
+var hero_run_flash: Array[Texture2D]
+var enemy_flash: Texture2D
+var world := Node2D.new()
+var idle_time := 0.0
+var idle_frame := 0
+var run_phase := 0.0
+var run_frame := -1
 
 func _ready() -> void:
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	font = preload("res://scripts/lab_font.gd").create()
+	hero_idle_flash = make_flash_frames(HERO_IDLE, &"idle")
+	hero_run_flash = make_flash_frames(HERO_RUN, &"run")
+	enemy_flash = make_flash_texture(ENEMY_IDLE)
+	var frame := Panel.new()
+	frame.position = ARENA_FRAME.position
+	frame.size = ARENA_FRAME.size
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.show_behind_parent = true
+	frame.add_theme_stylebox_override("panel", panel_style("#101c29", "#31495a", 10))
+	add_child(frame)
 
-func _process(_delta: float) -> void:
+	var arena_window := ColorRect.new()
+	arena_window.position = ARENA_WINDOW.position - ARENA_FRAME.position
+	arena_window.size = ARENA_WINDOW.size
+	arena_window.color = Color("#101b28")
+	arena_window.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	arena_window.clip_contents = true
+	frame.add_child(arena_window)
+	world.scale = Vector2.ONE * ARENA_ZOOM
+	world.draw.connect(draw_arena)
+	arena_window.add_child(world)
+
+func make_flash_texture(texture: Texture2D) -> Texture2D:
+	var pixels := texture.get_image()
+	for y in pixels.get_height():
+		for x in pixels.get_width():
+			pixels.set_pixel(x, y, Color(Color.WHITE, pixels.get_pixel(x, y).a))
+	return ImageTexture.create_from_image(pixels)
+
+func make_flash_frames(clip: SpriteFrames, animation: StringName) -> Array[Texture2D]:
+	var first_frame: AtlasTexture = clip.get_frame_texture(animation, 0)
+	var flash_atlas := make_flash_texture(first_frame.atlas)
+	var textures: Array[Texture2D] = []
+	for frame_index in clip.get_frame_count(animation):
+		var frame: AtlasTexture = clip.get_frame_texture(animation, frame_index)
+		var flash := frame.duplicate() as AtlasTexture
+		flash.atlas = flash_atlas
+		textures.append(flash)
+	return textures
+
+func _process(delta: float) -> void:
+	if lab == null or lab.player == null:
+		return
+	update_hero_animation(delta)
+	var at: Vector2 = lab.player.position
+	var half_width := ARENA_WINDOW.size.x / (2.0 * ARENA_ZOOM)
+	var focus_x := at.x
+	if lab.mode > 0:
+		var opponent_offset: float = lab.enemy.position.x - at.x
+		focus_x += clampf(opponent_offset * 0.5, -half_width * 0.5, half_width * 0.5)
+	var center_x := clampf(focus_x, lab.FLOOR_RECT.position.x + half_width, lab.FLOOR_RECT.end.x - half_width)
+	var ground_top: float = lab.FLOOR - (GROUND_LINE - ARENA_WINDOW.position.y) / ARENA_ZOOM
+	var top := minf(ground_top, at.y - 88.0)
+	world.position = (Vector2(ARENA_WINDOW.size.x * 0.5, 0) - Vector2(center_x, top) * ARENA_ZOOM).round()
+	world.queue_redraw()
 	queue_redraw()
+
+func update_hero_animation(delta: float) -> void:
+	var player = lab.player
+	if lab.paused or lab.panel.note.has_focus() or lab.freeze > 0.0:
+		return
+	var grounded_ready: bool = player.state == &"ready" and player.is_on_floor()
+	var speed: float = player.velocity.x
+	if grounded_ready and speed * player.facing > 1.0:
+		var run_count := HERO_RUN.get_frame_count(&"run")
+		if run_frame >= 0:
+			run_phase = fposmod(run_phase + absf(speed) * delta / HERO_RUN_LOOP_DISTANCE, 1.0)
+		run_frame = mini(floori(run_phase * run_count), run_count - 1)
+	else:
+		run_phase = 0.0
+		run_frame = -1
+	if not grounded_ready or absf(speed) > 1.0:
+		idle_time = 0.0
+		idle_frame = 0
+		return
+	var count := HERO_IDLE.get_frame_count(&"idle")
+	var frame_seconds := HERO_IDLE.get_frame_duration(&"idle", 0) / HERO_IDLE.get_animation_speed(&"idle")
+	idle_time = fposmod(idle_time + delta, count * frame_seconds)
+	idle_frame = mini(floori(idle_time / frame_seconds), count - 1)
 
 func txt(at: Vector2, caption: String, size_px := 16, color := INK) -> void:
 	draw_string(font, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, color)
 
-func centered(at: Vector2, caption: String, size_px := 14, color := INK) -> void:
+func centered(at: Vector2, caption: String, size_px := 14, color := INK, canvas: CanvasItem = null) -> void:
 	var width := font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
-	txt(at - Vector2(width * 0.5, 0), caption, size_px, color)
+	var target := self if canvas == null else canvas
+	target.draw_string(font, at - Vector2(width * 0.5, 0), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, color)
 
 func plate(rect: Rect2, fill: String, outline: String, radius: int) -> void:
+	draw_style_box(panel_style(fill, outline, radius), rect)
+
+func panel_style(fill: String, outline: String, radius: int) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.bg_color = Color(fill)
 	box.border_color = Color(outline)
 	box.set_border_width_all(1)
 	box.set_corner_radius_all(radius)
-	draw_style_box(box, rect)
+	return box
 
 func _draw() -> void:
 	if lab == null or lab.player == null:
 		return
 	txt(Vector2(28, 53), "死亡细胞 · 战斗实验室", 32)
 	txt(Vector2(29, 82), OBJECTIVES[lab.mode], 16, MUTED)
-	plate(Rect2(28, 151, 868, 445), "#101c29", "#31495a", 10)
-	draw_rect(Rect2(29, 208, 866, 347), Color("#101b28"))
-	for x in range(66, 890, 38):
-		draw_line(Vector2(x, 210), Vector2(x, 555), Color("#182838"))
-	for y in range(207, 555, 29):
-		draw_line(Vector2(30, y), Vector2(894, y), Color("#182838"))
-	draw_arena(lab.feedback.shake_offset())
 	draw_overlay()
 
-func draw_arena(offset: Vector2) -> void:
+func draw_arena() -> void:
+	var offset := Vector2(lab.feedback.shake_offset())
+	world.draw_set_transform(offset)
+	for x in range(66, 890, 38):
+		world.draw_line(Vector2(x, 198), Vector2(x, lab.FLOOR), Color("#182838"))
+	for y in range(207, 555, 29):
+		world.draw_line(Vector2(30, y), Vector2(896, y), Color("#182838"))
 	var player = lab.player
 	var enemy = lab.enemy
-	draw_set_transform(offset)
-	draw_rect(lab.FLOOR_RECT, Color("#25394b"))
-	draw_line(Vector2(31, 555), Vector2(895, 555), Color("#96b0b9"), 2.0)
+	world.draw_rect(lab.FLOOR_RECT, Color("#25394b"))
+	world.draw_line(Vector2(31, 555), Vector2(895, 555), Color("#96b0b9"), 2.0)
 	for x in range(52, 885, 38):
 		var long_tick := (x - 52) % 114 == 0
-		draw_line(Vector2(x, 556), Vector2(x, 572 if long_tick else 565), Color("#557285"), 1.0)
+		world.draw_line(Vector2(x, 556), Vector2(x, 572 if long_tick else 565), Color("#557285"), 1.0)
 	if lab.mode == 0:
-		draw_rect(lab.PLATFORM, Color("#405e70"))
-		draw_line(lab.PLATFORM.position, lab.PLATFORM.position + Vector2(lab.PLATFORM.size.x, 0), BLUE, 2.0)
-		centered(Vector2(501, 459), "实体平台 · 127 px", 12, MUTED)
+		world.draw_rect(lab.PLATFORM, Color("#405e70"))
+		world.draw_line(lab.PLATFORM.position, lab.PLATFORM.position + Vector2(lab.PLATFORM.size.x, 0), BLUE, 2.0)
+		centered(Vector2(501, 459), "实体平台 · 127 px", 12, MUTED, world)
 	if lab.mode > 0:
 		draw_enemy_range(enemy)
 		draw_player_range(player)
 		draw_blast()
-		draw_actor(enemy.position, enemy.facing, ENEMY_BODY, RED, lab.feedback.flash_amount(enemy), false, enemy.state == &"dead")
+		draw_actor(enemy.position, -enemy.facing, ENEMY_IDLE, enemy_flash, RED, lab.feedback.flash_amount(enemy), false, enemy.state == &"dead", offset)
 		if enemy.state == &"windup":
 			var shoulder: Vector2 = enemy.position + Vector2(enemy.facing * 12, -33)
 			var fist := shoulder + Vector2(enemy.facing * 11, -23)
-			draw_line(shoulder, fist, GOLD, 5.0)
-			draw_circle(fist, 4.0, GOLD)
-	draw_actor(player.position, player.facing, PLAYER_BODY, TEAL, lab.feedback.flash_amount(player), player.state == &"roll", player.hp <= 0)
+			world.draw_line(shoulder, fist, GOLD, 5.0)
+			world.draw_circle(fist, 4.0, GOLD)
+	var hero_sprite := HERO_IDLE.get_frame_texture(&"idle", idle_frame)
+	var hero_flash := hero_idle_flash[idle_frame]
+	var hero_bounds := HERO_IDLE_BOUNDS
+	if run_frame >= 0:
+		hero_sprite = HERO_RUN.get_frame_texture(&"run", run_frame)
+		hero_flash = hero_run_flash[run_frame]
+		hero_bounds = HERO_RUN_BOUNDS
+	draw_actor(player.position, player.facing, hero_sprite, hero_flash, TEAL, lab.feedback.flash_amount(player), player.state == &"roll", player.hp <= 0, offset, hero_bounds)
 	if lab.ball != null:
 		draw_ball(lab.ball)
 	if player.state == &"roll" and player.invulnerable():
-		draw_arc(player.position - Vector2(0, 19), 23, 0, TAU, 22, BLUE, 2.0, true)
+		world.draw_arc(player.position - Vector2(0, 19), 23, 0, TAU, 22, BLUE, 2.0, true)
 	if lab.options.boxes:
-		draw_rect(lab.hurt_rect(player.position, PLAYER_BODY), Color(TEAL, 0.37), false)
+		world.draw_rect(lab.hurt_rect(player.position, PLAYER_BODY), Color(TEAL, 0.37), false)
 		if lab.mode > 0 and enemy.hp > 0:
-			draw_rect(lab.hurt_rect(enemy.position, ENEMY_BODY), Color(RED, 0.40), false)
-	lab.feedback.draw_effects(self, font)
-	draw_set_transform(Vector2.ZERO)
+			world.draw_rect(lab.hurt_rect(enemy.position, ENEMY_BODY), Color(RED, 0.40), false)
+	lab.feedback.draw_effects(world, font)
+	world.draw_set_transform(Vector2.ZERO)
 
 func draw_ball(ball: ThrowBall) -> void:
 	var color := RED if ball.targets_player else TEAL
-	draw_circle(ball.position, ThrowBall.RADIUS + 3.0, Color("#0e1925"))
-	draw_circle(ball.position, ThrowBall.RADIUS, Color(color, 0.45))
-	draw_circle(ball.position, 4.0, GOLD)
+	world.draw_circle(ball.position, ThrowBall.RADIUS + 3.0, Color("#0e1925"))
+	world.draw_circle(ball.position, ThrowBall.RADIUS, Color(color, 0.45))
+	world.draw_circle(ball.position, 4.0, GOLD)
 	var fraction := clampf(ball.remaining / ball.fuse_time, 0.0, 1.0)
-	draw_arc(ball.position, ThrowBall.RADIUS + 3.0, -PI / 2, -PI / 2 + TAU * fraction, 28, color, 2.2, true)
+	world.draw_arc(ball.position, ThrowBall.RADIUS + 3.0, -PI / 2, -PI / 2 + TAU * fraction, 28, color, 2.2, true)
 
 func draw_blast() -> void:
 	if lab.blast_time <= 0.0:
@@ -104,8 +211,8 @@ func draw_blast() -> void:
 	var center: Vector2 = lab.blast_position
 	var opacity: float = clampf(lab.blast_time / 0.28, 0.0, 1.0)
 	var color := RED if lab.blast_targets_player else TEAL
-	draw_circle(center, ThrowBall.BLAST_RADIUS, Color(color, opacity * 0.22))
-	draw_arc(center, ThrowBall.BLAST_RADIUS, 0.0, TAU, 44, Color(color, opacity), 2.0, true)
+	world.draw_circle(center, ThrowBall.BLAST_RADIUS, Color(color, opacity * 0.22))
+	world.draw_arc(center, ThrowBall.BLAST_RADIUS, 0.0, TAU, 44, Color(color, opacity), 2.0, true)
 
 func draw_enemy_range(enemy) -> void:
 	if enemy.state == &"windup" or (enemy.state == &"active" and lab.options.boxes):
@@ -114,13 +221,13 @@ func draw_enemy_range(enemy) -> void:
 		return
 	var tag: String = PHASE_NAMES.get(str(enemy.state), "")
 	var color := GOLD if enemy.state == &"windup" else (TEAL if enemy.state == &"recovery" else INK)
-	centered(enemy.position - Vector2(0, 76), ("!  " if enemy.state == &"windup" else "") + tag, 15, color)
+	centered(enemy.position - Vector2(0, 76), ("!  " if enemy.state == &"windup" else "") + tag, 15, color, world)
 	var timer_key: String = str(enemy.state)
 	if timer_key in ["windup", "active", "recovery", "stagger"]:
 		var duration: float = enemy.hurt_time if timer_key == "stagger" else enemy.swing[timer_key]
 		var progress := clampf(enemy.age / duration, 0.0, 1.0)
-		draw_rect(Rect2(enemy.position - Vector2(25, 67), Vector2(50, 4)), Color("#364859"))
-		draw_rect(Rect2(enemy.position - Vector2(25, 67), Vector2(progress * 50, 4)), color)
+		world.draw_rect(Rect2(enemy.position - Vector2(25, 67), Vector2(50, 4)), Color("#364859"))
+		world.draw_rect(Rect2(enemy.position - Vector2(25, 67), Vector2(progress * 50, 4)), color)
 
 func draw_player_range(player) -> void:
 	var phase: String = player.attack_phase()
@@ -128,30 +235,25 @@ func draw_player_range(player) -> void:
 		draw_range(lab.hit_rect(player.position, player.facing, player.swing.reach), TEAL, phase == "active")
 
 func draw_range(zone: Rect2, color: Color, active: bool) -> void:
-	draw_rect(zone, Color(color, 0.24 if active else 0.10))
+	world.draw_rect(zone, Color(color, 0.24 if active else 0.10))
 	if lab.options.boxes:
-		draw_rect(zone, Color(color, 0.95 if active else 0.56), false, 1.5)
+		world.draw_rect(zone, Color(color, 0.95 if active else 0.56), false, 1.5)
 
-func draw_actor(at: Vector2, direction: float, body: Vector2, color: Color, flash: float, rolling: bool, dead: bool) -> void:
+func draw_actor(at: Vector2, horizontal_scale: float, sprite: Texture2D, flash_texture: Texture2D, color: Color, flash: float, rolling: bool, dead: bool, offset: Vector2, bounds := IDLE_BOUNDS) -> void:
 	color = color.lerp(Color.WHITE, flash)
 	if dead:
-		draw_rect(Rect2(at - Vector2(21, 14), Vector2(42, 12)), Color(color, 0.38))
+		world.draw_rect(Rect2(at - Vector2(21, 14), Vector2(42, 12)), Color(color, 0.38))
 		return
-	draw_line(at + Vector2(-22, 0), at + Vector2(22, 0), Color("#09111c"), 5.0)
+	world.draw_line(at + Vector2(-22, 0), at + Vector2(22, 0), Color("#09111c"), 5.0)
 	if rolling:
-		draw_circle(at - Vector2(0, 16), 16, color)
-		draw_arc(at - Vector2(0, 16), 10, -0.35, 4.5, 16, Color("#1d4350"), 3.0, true)
+		world.draw_circle(at - Vector2(0, 16), 16, color)
+		world.draw_arc(at - Vector2(0, 16), 10, -0.35, 4.5, 16, Color("#1d4350"), 3.0, true)
 		return
-	var top := at - Vector2(0, body.y)
-	draw_rect(Rect2(top - Vector2(9, 0), Vector2(18, 15)), color)
-	draw_colored_polygon(PackedVector2Array([
-		top + Vector2(-body.x / 2, 16), top + Vector2(body.x / 2, 16),
-		at + Vector2(body.x * 0.37, -8), at - Vector2(body.x * 0.37, 8),
-	]), Color(color, 0.86))
-	draw_line(at - Vector2(7, 11), at - Vector2(9, 1), color, 5.0)
-	draw_line(at + Vector2(7, -11), at + Vector2(9, -1), color, 5.0)
-	draw_line(top + Vector2(direction * 2, 6), top + Vector2(direction * 9, 6), Color("#0e1b29"), 3.0)
-	draw_line(top + Vector2(direction * 14, 23), top + Vector2(direction * 23, 27), color, 3.0)
+	world.draw_set_transform((at + offset).round(), 0.0, Vector2(horizontal_scale, 1.0))
+	world.draw_texture_rect(sprite, bounds, false)
+	if flash > 0.0:
+		world.draw_texture_rect(flash_texture, bounds, false, Color(Color.WHITE, flash))
+	world.draw_set_transform(offset)
 
 func draw_overlay() -> void:
 	var player = lab.player
